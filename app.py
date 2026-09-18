@@ -90,8 +90,11 @@ class App(tk.Tk):
 
     def show(self,key):
         self.clear()
-        for k,b in self.buttons.items(): b.configure(bg="#263552" if k==key else "#172033")
-        getattr(self,key+"_page",self.placeholder)(dict(MODULES)[key])
+        for k,b in self.buttons.items():
+            b.configure(bg="#263552" if k==key else "#172033")
+        title = next((label for label,module_key in MODULES if module_key == key), key)
+        page = getattr(self, key + "_page", self.placeholder)
+        page(title)
 
     def dashboard_page(self,_):
         self.title_block("لوحة التحكم","ملخص النظام في شاشة واحدة")
