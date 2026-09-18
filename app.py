@@ -190,7 +190,143 @@ class App(tk.Tk):
         tk.Button(form,text="حفظ العملية",command=save,bg="#172033",fg="#fff",relief="flat",font=("Tahoma",10,"bold"),padx=20,pady=8).pack(side="left",padx=18,pady=18)
         refresh()
 
-    def sales_page(self,_): self.transaction_page("المبيعات","بيع")
+    def sales_page(self,_):
+        self.title_block("المبيعات","واجهة البيع الرئيسية — إنشاء فاتورة وإتمام البيع من شاشة واحدة")
+
+        root=tk.Frame(self.content,bg="#f4f6f8"); root.pack(fill="both",expand=True,padx=22,pady=5)
+
+        # بيانات الفاتورة
+        top=tk.Frame(root,bg="#fff",highlightthickness=1,highlightbackground="#e5e7eb")
+        top.pack(fill="x",pady=(0,8))
+        customer=tk.StringVar()
+        payment=tk.StringVar(value="نقدي")
+        tk.Label(top,text="العميل",bg="#fff",fg="#374151",font=("Tahoma",9)).pack(side="right",padx=(12,4),pady=12)
+        customer_entry=tk.Entry(top,textvariable=customer,width=22,justify="right",font=("Tahoma",10))
+        customer_entry.pack(side="right",pady=10)
+        tk.Label(top,text="طريقة الدفع",bg="#fff",fg="#374151",font=("Tahoma",9)).pack(side="right",padx=(18,4))
+        ttk.Combobox(top,textvariable=payment,values=["نقدي","آجل","بطاقة"],state="readonly",width=12,justify="right").pack(side="right",pady=10)
+        invoice_no=tk.StringVar(value=datetime.now().strftime("فاتورة-%Y%m%d-%H%M%S"))
+        tk.Label(top,textvariable=invoice_no,bg="#fff",fg="#6b7280",font=("Tahoma",9,"bold")).pack(side="left",padx=16)
+
+        main=tk.Frame(root,bg="#f4f6f8"); main.pack(fill="both",expand=True)
+
+        # قائمة الأصناف
+        products=tk.Frame(main,bg="#fff",highlightthickness=1,highlightbackground="#e5e7eb")
+        products.pack(side="left",fill="both",expand=True,padx=(0,7))
+        tk.Label(products,text="الأصناف",bg="#fff",fg="#172033",font=("Tahoma",13,"bold")).pack(anchor="e",padx=14,pady=(12,6))
+        search=tk.StringVar()
+        search_entry=tk.Entry(products,textvariable=search,justify="right",font=("Tahoma",10))
+        search_entry.pack(fill="x",padx=12,pady=(0,8))
+        search_entry.insert(0,"ابحث باسم الصنف أو الباركود")
+        search_entry.bind("<FocusIn>",lambda e: search_entry.delete(0,"end") if search_entry.get()=="ابحث باسم الصنف أو الباركود" else None)
+        pcols=("id","name","barcode","price","qty")
+        ptree=ttk.Treeview(products,columns=pcols,show="headings",height=15)
+        for c,h,w in [("id","الرقم",55),("name","الصنف",190),("barcode","الباركود",120),("price","سعر البيع",95),("qty","المخزون",85)]:
+            ptree.heading(c,text=h,anchor="e"); ptree.column(c,width=w,anchor="e")
+        ptree.pack(fill="both",expand=True,padx=10,pady=5)
+
+        controls=tk.Frame(products,bg="#fff"); controls.pack(fill="x",padx=10,pady=8)
+        qty=tk.StringVar(value="1"); discount=tk.StringVar(value="0")
+        tk.Label(controls,text="الكمية",bg="#fff").pack(side="right",padx=4)
+        tk.Entry(controls,textvariable=qty,width=8,justify="right").pack(side="right",padx=4)
+        tk.Label(controls,text="الخصم",bg="#fff").pack(side="right",padx=4)
+        tk.Entry(controls,textvariable=discount,width=8,justify="right").pack(side="right",padx=4)
+        invoice=[]
+
+        # الفاتورة الحالية
+        bill=tk.Frame(main,bg="#fff",highlightthickness=1,highlightbackground="#e5e7eb",width=480)
+        bill.pack(side="right",fill="both",padx=(7,0)); bill.pack_propagate(False)
+        tk.Label(bill,text="الفاتورة الحالية",bg="#fff",fg="#172033",font=("Tahoma",13,"bold")).pack(anchor="e",padx=14,pady=(12,6))
+        bcols=("name","qty","price","discount","total")
+        btree=ttk.Treeview(bill,columns=bcols,show="headings",height=13)
+        for c,h,w in [("name","الصنف",145),("qty","الكمية",55),("price","السعر",75),("discount","الخصم",65),("total","الإجمالي",85)]:
+            btree.heading(c,text=h,anchor="e"); btree.column(c,width=w,anchor="e")
+        btree.pack(fill="both",expand=True,padx=10,pady=5)
+
+        totals=tk.Frame(bill,bg="#fff"); totals.pack(fill="x",padx=14,pady=6)
+        subtotal=tk.StringVar(value="0.00"); total_discount=tk.StringVar(value="0.00"); grand=tk.StringVar(value="0.00")
+        for label,var in [("المجموع",subtotal),("الخصم",total_discount),("الإجمالي المستحق",grand)]:
+            r=tk.Frame(totals,bg="#fff"); r.pack(fill="x",pady=2)
+            tk.Label(r,text=label,bg="#fff",fg="#4b5563",font=("Tahoma",10,"bold" if label=="الإجمالي المستحق" else "normal")).pack(side="right")
+            tk.Label(r,textvariable=var,bg="#fff",fg="#172033",font=("Tahoma",11,"bold")).pack(side="left")
+
+        def refresh_products(*_):
+            ptree.delete(*ptree.get_children())
+            q=search.get().strip()
+            c=db()
+            rows=c.execute("SELECT id,name,barcode,sale_price,quantity FROM items WHERE name LIKE ? OR barcode LIKE ? ORDER BY name",(f"%{q}%",f"%{q}%")).fetchall() if q and q!="ابحث باسم الصنف أو الباركود" else c.execute("SELECT id,name,barcode,sale_price,quantity FROM items ORDER BY name").fetchall()
+            for r in rows: ptree.insert("", "end",values=(r["id"],r["name"],r["barcode"] or "",r["sale_price"],r["quantity"]))
+            c.close()
+
+        def refresh_bill():
+            btree.delete(*btree.get_children())
+            sub=disc=0
+            for i in invoice:
+                btree.insert("", "end",values=(i["name"],i["qty"],f'{i["price"]:,.2f}',f'{i["discount"]:,.2f}',f'{i["total"]:,.2f}'))
+                sub += i["qty"]*i["price"]; disc += i["discount"]
+            subtotal.set(f"{sub:,.2f}"); total_discount.set(f"{disc:,.2f}"); grand.set(f"{sub-disc:,.2f}")
+
+        def add_selected(event=None):
+            sel=ptree.selection()
+            if not sel: return
+            vals=ptree.item(sel[0],"values")
+            try:
+                q=float(qty.get() or 0); d=float(discount.get() or 0)
+            except ValueError:
+                messagebox.showwarning("تنبيه","تحقق من الكمية والخصم."); return
+            if q<=0 or d<0: messagebox.showwarning("تنبيه","الكمية والخصم يجب أن يكونا صحيحين."); return
+            stock=float(vals[4]); price=float(vals[3])
+            if q>stock: messagebox.showwarning("تنبيه","الكمية المطلوبة أكبر من المخزون المتاح."); return
+            total=q*price-d
+            if total<0: messagebox.showwarning("تنبيه","الخصم أكبر من قيمة الصنف."); return
+            invoice.append({"id":int(vals[0]),"name":vals[1],"qty":q,"price":price,"discount":d,"total":total})
+            refresh_bill(); qty.set("1"); discount.set("0")
+
+        def remove_line():
+            sel=btree.selection()
+            if not sel: return
+            idx=btree.index(sel[0]); invoice.pop(idx); refresh_bill()
+
+        def clear_bill():
+            invoice.clear(); refresh_bill(); customer.set(""); payment.set("نقدي")
+            invoice_no.set(datetime.now().strftime("فاتورة-%Y%m%d-%H%M%S"))
+
+        def complete_sale():
+            if not invoice:
+                messagebox.showwarning("تنبيه","الفاتورة فارغة."); return
+            c=db()
+            try:
+                # التحقق مرة ثانية من المخزون داخل المعاملة قبل الحفظ
+                for i in invoice:
+                    row=c.execute("SELECT quantity FROM items WHERE id=?",(i["id"],)).fetchone()
+                    if not row or float(row["quantity"])<i["qty"]:
+                        raise ValueError(f"المخزون غير كافٍ للصنف: {i['name']}")
+                inv=invoice_no.get(); party=customer.get().strip() or "عميل نقدي"
+                total=sum(i["total"] for i in invoice)
+                for i in invoice:
+                    c.execute("UPDATE items SET quantity=quantity-? WHERE id=?",(i["qty"],i["id"]))
+                    c.execute("INSERT INTO transactions(kind,party,item,quantity,total,created_at) VALUES(?,?,?,?,?,?)",("بيع",party,i["name"],i["qty"],i["total"],now()))
+                if payment.get()=="نقدي":
+                    c.execute("INSERT INTO finance(kind,description,amount,created_at) VALUES(?,?,?,?)",("قبض",inv,total,now()))
+                c.commit()
+                audit("إتمام بيع",f"{inv} | {party} | {total:,.2f} | {payment.get()}")
+                messagebox.showinfo("تم الحفظ",f"تم إتمام الفاتورة بنجاح\\nالإجمالي: {total:,.2f}")
+                clear_bill(); refresh_products()
+            except ValueError as e:
+                c.rollback(); messagebox.showwarning("تنبيه",str(e))
+            except Exception as e:
+                c.rollback(); messagebox.showerror("خطأ","تعذر حفظ الفاتورة.\\n"+str(e))
+            finally:
+                c.close()
+
+        search.trace_add("write",refresh_products)
+        ptree.bind("<Double-1>",add_selected)
+        tk.Button(controls,text="إضافة للفاتورة",command=add_selected,bg="#172033",fg="#fff",relief="flat",font=("Tahoma",9,"bold"),padx=14,pady=7).pack(side="left",padx=4)
+        tk.Button(bill,text="حذف السطر المحدد",command=remove_line,bg="#6b7280",fg="#fff",relief="flat",padx=12,pady=7).pack(side="left",padx=10,pady=6)
+        tk.Button(bill,text="تفريغ الفاتورة",command=clear_bill,bg="#9ca3af",fg="#fff",relief="flat",padx=12,pady=7).pack(side="left",padx=4,pady=6)
+        tk.Button(bill,text="إتمام البيع وحفظ الفاتورة",command=complete_sale,bg="#15803d",fg="#fff",relief="flat",font=("Tahoma",10,"bold"),padx=18,pady=9).pack(fill="x",padx=10,pady=(4,12))
+        refresh_products()
+
     def purchases_page(self,_): self.transaction_page("المشتريات","شراء")
     def customers_page(self,_): self.entity_page("العملاء","customers",[("اسم العميل","name"),("الهاتف","phone"),("العنوان","address")])
     def suppliers_page(self,_): self.entity_page("الموردون","suppliers",[("اسم المورد","name"),("الهاتف","phone"),("العنوان","address")])
