@@ -12,7 +12,7 @@ APP_DIR.mkdir(parents=True, exist_ok=True)
 MODULES = [
     ("لوحة التحكم", "dashboard"), ("المبيعات", "sales"), ("المشتريات", "purchases"),
     ("الأصناف", "items"), ("المخزون", "inventory"), ("العملاء", "customers"),
-    ("الموردون", "suppliers"), ("المالية", "finance"), ("الموظفون", "employees"),
+    ("الموردون", "suppliers"), ("المالية", "finance"), ("الموظفون", "employees"), ("المستخدمون والصلاحيات", "users"),
     ("التقارير", "reports"), ("سجل الحركة والتدقيق", "audit"), ("الإعدادات", "settings")
 ]
 
@@ -41,8 +41,19 @@ def init_db():
     CREATE TABLE IF NOT EXISTS transactions(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,party TEXT,item TEXT,quantity REAL DEFAULT 0,total REAL DEFAULT 0,created_at TEXT);
     CREATE TABLE IF NOT EXISTS finance(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,description TEXT,amount REAL DEFAULT 0,created_at TEXT);
     CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,action TEXT NOT NULL,details TEXT,created_at TEXT);
+    CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,role TEXT NOT NULL,active INTEGER DEFAULT 1,created_at TEXT);
+    CREATE TABLE IF NOT EXISTS market_info(id INTEGER PRIMARY KEY CHECK(id=1),market_name TEXT,owner_name TEXT,phone TEXT,address TEXT,updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS system_settings(key TEXT PRIMARY KEY,value TEXT,updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS undo_log(id INTEGER PRIMARY KEY AUTOINCREMENT,action TEXT NOT NULL,details TEXT,created_at TEXT);
     """)
     c.commit(); c.close()
+
+def setting_get(key, default=""):
+    c=db(); r=c.execute("SELECT value FROM system_settings WHERE key=?",(key,)).fetchone(); c.close()
+    return r["value"] if r else default
+
+def setting_set(key,value):
+    c=db(); c.execute("INSERT INTO system_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",(key,value,now())); c.commit(); c.close()
 
 class App(tk.Tk):
     def __init__(self):
@@ -327,10 +338,68 @@ class App(tk.Tk):
         tk.Button(bill,text="إتمام البيع وحفظ الفاتورة",command=complete_sale,bg="#15803d",fg="#fff",relief="flat",font=("Tahoma",10,"bold"),padx=18,pady=9).pack(fill="x",padx=10,pady=(4,12))
         refresh_products()
 
-    def purchases_page(self,_): self.transaction_page("المشتريات","شراء")
+    def purchases_page(self,_):
+        self.title_block("المشتريات","إنشاء عملية شراء وتحديث المخزون تلقائياً")
+        form=tk.Frame(self.content,bg="#fff",highlightthickness=1,highlightbackground="#e5e7eb"); form.pack(fill="x",padx=28,pady=6)
+        supplier=tk.StringVar(); item=tk.StringVar(); qty=tk.StringVar(value="1"); total=tk.StringVar(value="0")
+        fields=[("المورد",supplier,22),("الصنف",item,22),("الكمية",qty,10),("الإجمالي",total,14)]
+        for label,var,w in fields:
+            r=tk.Frame(form,bg="#fff"); r.pack(side="right",padx=7,pady=12)
+            tk.Label(r,text=label,bg="#fff",font=("Tahoma",9)).pack(anchor="e")
+            tk.Entry(r,textvariable=var,width=w,justify="right").pack(pady=4)
+        tree=ttk.Treeview(self.content,columns=("date","supplier","item","qty","total"),show="headings")
+        for c,h,w in [("date","التاريخ",180),("supplier","المورد",170),("item","الصنف",200),("qty","الكمية",100),("total","الإجمالي",130)]:
+            tree.heading(c,text=h,anchor="e"); tree.column(c,width=w,anchor="e")
+        tree.pack(fill="both",expand=True,padx=28,pady=10)
+        def refresh():
+            tree.delete(*tree.get_children()); c=db()
+            for r in c.execute("SELECT created_at,party,item,quantity,total FROM transactions WHERE kind='شراء' ORDER BY id DESC").fetchall():
+                tree.insert("","end",values=tuple(r))
+            c.close()
+        def save():
+            name=item.get().strip()
+            try: q=float(qty.get() or 0); amount=float(total.get() or 0)
+            except ValueError: messagebox.showwarning("تنبيه","تحقق من الكمية والإجمالي."); return
+            if not name or q<=0: messagebox.showwarning("تنبيه","أدخل الصنف والكمية."); return
+            c=db(); row=c.execute("SELECT id FROM items WHERE name=?",(name,)).fetchone()
+            if row: c.execute("UPDATE items SET quantity=quantity+? WHERE id=?",(q,row["id"]))
+            else:
+                c.execute("INSERT INTO items(name,barcode,sale_price,purchase_price,quantity,created_at) VALUES(?,?,?,?,?,?)",(name,"",0,amount/q,q,now()))
+            c.execute("INSERT INTO transactions(kind,party,item,quantity,total,created_at) VALUES(?,?,?,?,?,?)",("شراء",supplier.get().strip() or "مورد غير محدد",name,q,amount,now()))
+            c.commit(); c.close(); audit("إتمام شراء",f"{name} - {q} - {amount:,.2f}")
+            supplier.set(""); item.set(""); qty.set("1"); total.set("0"); refresh()
+        tk.Button(form,text="حفظ عملية الشراء",command=save,bg="#172033",fg="#fff",relief="flat",font=("Tahoma",10,"bold"),padx=20,pady=8).pack(side="left",padx=18,pady=18)
+        refresh()
     def customers_page(self,_): self.entity_page("العملاء","customers",[("اسم العميل","name"),("الهاتف","phone"),("العنوان","address")])
     def suppliers_page(self,_): self.entity_page("الموردون","suppliers",[("اسم المورد","name"),("الهاتف","phone"),("العنوان","address")])
     def employees_page(self,_): self.entity_page("الموظفون","employees",[("اسم الموظف","name"),("الهاتف","phone"),("الوظيفة","job")])
+
+    def users_page(self,_):
+        self.title_block("المستخدمون والصلاحيات","إدارة المستخدمين والأدوار الأساسية")
+        form=tk.Frame(self.content,bg="#fff",highlightthickness=1,highlightbackground="#e5e7eb"); form.pack(fill="x",padx=28,pady=6)
+        name=tk.StringVar(); role=tk.StringVar(value="مدير النظام")
+        tk.Label(form,text="اسم المستخدم",bg="#fff").pack(side="right",padx=6,pady=15)
+        tk.Entry(form,textvariable=name,width=22,justify="right").pack(side="right",padx=6,pady=15)
+        tk.Label(form,text="الصلاحية",bg="#fff").pack(side="right",padx=6)
+        ttk.Combobox(form,textvariable=role,values=["مدير النظام","محاسب","مبيعات","مخزون"],state="readonly",width=16).pack(side="right",padx=6)
+        tree=ttk.Treeview(self.content,columns=("id","name","role","active","date"),show="headings")
+        for c,h in [("id","الرقم"),("name","المستخدم"),("role","الصلاحية"),("active","الحالة"),("date","تاريخ الإضافة")]:
+            tree.heading(c,text=h,anchor="e"); tree.column(c,width=180,anchor="e")
+        tree.pack(fill="both",expand=True,padx=28,pady=10)
+        def refresh():
+            tree.delete(*tree.get_children()); c=db()
+            for r in c.execute("SELECT id,name,role,active,created_at FROM users ORDER BY id DESC").fetchall():
+                tree.insert("","end",values=(r["id"],r["name"],r["role"],"فعال" if r["active"] else "موقوف",r["created_at"]))
+            c.close()
+        def save():
+            n=name.get().strip()
+            if not n: messagebox.showwarning("تنبيه","أدخل اسم المستخدم."); return
+            try:
+                c=db(); c.execute("INSERT INTO users(name,role,created_at) VALUES(?,?,?)",(n,role.get(),now())); c.commit(); c.close()
+            except sqlite3.IntegrityError: messagebox.showwarning("تنبيه","اسم المستخدم موجود مسبقاً."); return
+            audit("إضافة مستخدم",f"{n} - {role.get()}"); name.set(""); refresh()
+        tk.Button(form,text="إضافة مستخدم",command=save,bg="#172033",fg="#fff",relief="flat",padx=18,pady=8).pack(side="left",padx=18,pady=15)
+        refresh()
 
     def inventory_page(self,_):
         self.title_block("المخزون","الرصيد الحالي وقيمة المخزون")
@@ -363,27 +432,67 @@ class App(tk.Tk):
         refresh()
 
     def reports_page(self,_):
-        self.title_block("التقارير","ملخص قابل للعرض من قاعدة البيانات")
-        box=tk.Frame(self.content,bg="#fff",highlightthickness=1,highlightbackground="#e5e7eb"); box.pack(fill="both",expand=True,padx=28,pady=10)
-        c=db(); sales=c.execute("SELECT COALESCE(SUM(total),0) n FROM transactions WHERE kind='بيع'").fetchone()["n"]; purchases=c.execute("SELECT COALESCE(SUM(total),0) n FROM transactions WHERE kind='شراء'").fetchone()["n"]; cash=c.execute("SELECT COALESCE(SUM(CASE WHEN kind='قبض' THEN amount ELSE -amount END),0) n FROM finance").fetchone()["n"]; c.close()
-        for text,val in [("إجمالي المبيعات",sales),("إجمالي المشتريات",purchases),("صافي الحركة المالية",cash)]:
-            self.card(box,text,f"{val:,.2f}")
-        tk.Label(box,text="يمكن توسيع التقارير لاحقاً بإضافة الفترات والتصفية والطباعة.",bg="#fff",fg="#6b7280",font=("Tahoma",11)).pack(anchor="e",padx=20,pady=25)
+        self.title_block("التقارير","تقارير قابلة للتصفية حسب النوع والفترة")
+        bar=tk.Frame(self.content,bg="#fff"); bar.pack(fill="x",padx=28,pady=6)
+        typ=tk.StringVar(value="الكل"); frm=tk.StringVar(); to=tk.StringVar()
+        tk.Label(bar,text="النوع",bg="#fff").pack(side="right",padx=5)
+        ttk.Combobox(bar,textvariable=typ,values=["الكل","بيع","شراء"],state="readonly",width=12).pack(side="right",padx=5)
+        tk.Label(bar,text="من (YYYY-MM-DD)",bg="#fff").pack(side="right",padx=5)
+        tk.Entry(bar,textvariable=frm,width=14,justify="right").pack(side="right",padx=5)
+        tk.Label(bar,text="إلى",bg="#fff").pack(side="right",padx=5)
+        tk.Entry(bar,textvariable=to,width=14,justify="right").pack(side="right",padx=5)
+        box=tk.Frame(self.content,bg="#fff"); box.pack(fill="both",expand=True,padx=28,pady=10)
+        tree=ttk.Treeview(box,columns=("date","kind","party","item","qty","total"),show="headings")
+        for c,h,w in [("date","التاريخ",180),("kind","النوع",100),("party","الطرف",160),("item","الصنف",180),("qty","الكمية",90),("total","الإجمالي",120)]:
+            tree.heading(c,text=h,anchor="e"); tree.column(c,width=w,anchor="e")
+        tree.pack(fill="both",expand=True,padx=10,pady=10)
+        summary=tk.StringVar(value=""); tk.Label(box,textvariable=summary,bg="#fff",fg="#172033",font=("Tahoma",11,"bold")).pack(anchor="e",padx=12,pady=6)
+        def refresh():
+            tree.delete(*tree.get_children()); c=db()
+            sql="SELECT created_at,kind,party,item,quantity,total FROM transactions WHERE 1=1"; args=[]
+            if typ.get()!="الكل": sql+=" AND kind=?"; args.append(typ.get())
+            if frm.get().strip(): sql+=" AND date(created_at)>=date(?)"; args.append(frm.get().strip())
+            if to.get().strip(): sql+=" AND date(created_at)<=date(?)"; args.append(to.get().strip())
+            sql+=" ORDER BY id DESC"; rows=c.execute(sql,args).fetchall()
+            total_sum=0
+            for r in rows: tree.insert("","end",values=tuple(r)); total_sum+=float(r["total"] or 0)
+            c.close(); summary.set(f"عدد العمليات: {len(rows)}    |    الإجمالي: {total_sum:,.2f}")
+        tk.Button(bar,text="عرض التقرير",command=refresh,bg="#172033",fg="#fff",relief="flat",padx=18,pady=7).pack(side="left",padx=15)
+        refresh()
 
     def audit_page(self,_):
-        self.title_block("سجل الحركة والتدقيق","كل عملية مهمة تسجل بتاريخها وتفاصيلها")
-        tree=ttk.Treeview(self.content,columns=("date","action","details"),show="headings"); tree.pack(fill="both",expand=True,padx=28,pady=10)
-        for c,h,w in [("date","التاريخ والوقت",180),("action","العملية",210),("details","التفاصيل",600)]: tree.heading(c,text=h,anchor="e"); tree.column(c,width=w,anchor="e")
-        c=db()
-        for r in c.execute("SELECT created_at,action,details FROM audit ORDER BY id DESC").fetchall(): tree.insert("", "end",values=tuple(r))
-        c.close()
+        self.title_block("سجل الحركة والتدقيق","سجل فعلي للعمليات التي ينفذها المستخدم داخل النظام")
+        tree=ttk.Treeview(self.content,columns=("date","action","details"),show="headings")
+        for c,h,w in [("date","التاريخ والوقت",180),("action","العملية",220),("details","التفاصيل",650)]:
+            tree.heading(c,text=h,anchor="e"); tree.column(c,width=w,anchor="e")
+        tree.pack(fill="both",expand=True,padx=28,pady=10)
+        def refresh():
+            tree.delete(*tree.get_children()); c=db()
+            for r in c.execute("SELECT created_at,action,details FROM audit ORDER BY id DESC").fetchall():
+                tree.insert("","end",values=tuple(r))
+            c.close()
+        tk.Button(self.content,text="تحديث السجل",command=refresh,bg="#172033",fg="#fff",relief="flat",padx=18,pady=7).pack(anchor="e",padx=28)
+        refresh()
 
     def settings_page(self,_):
-        self.title_block("الإعدادات","تهيئة البرنامج وبياناته الأساسية")
+        self.title_block("الإعدادات وتهيئة النظام","بيانات السوق الأساسية وأدوات التهيئة")
         box=tk.Frame(self.content,bg="#fff",highlightthickness=1,highlightbackground="#e5e7eb"); box.pack(fill="both",expand=True,padx=28,pady=10)
-        tk.Label(box,text="مسار بيانات النظام:",bg="#fff",fg="#374151",font=("Tahoma",11,"bold")).pack(anchor="e",padx=25,pady=(30,5))
-        tk.Label(box,text=str(DB_PATH),bg="#fff",fg="#6b7280",font=("Tahoma",10)).pack(anchor="e",padx=25)
-        tk.Button(box,text="تسجيل عملية فحص النظام",command=lambda:(audit("فحص النظام","تم تنفيذ فحص يدوي"),messagebox.showinfo("تم","تم تسجيل الفحص في سجل الحركة.")),bg="#172033",fg="#fff",relief="flat",padx=20,pady=9).pack(anchor="e",padx=25,pady=25)
+        market=tk.StringVar(value=setting_get("market_name","")); owner=tk.StringVar(value=setting_get("owner_name",""))
+        phone=tk.StringVar(value=setting_get("phone","")); address=tk.StringVar(value=setting_get("address",""))
+        for label,var in [("اسم السوق",market),("اسم المالك",owner),("رقم الهاتف",phone),("العنوان",address)]:
+            r=tk.Frame(box,bg="#fff"); r.pack(fill="x",padx=25,pady=8)
+            tk.Label(r,text=label,bg="#fff",width=18,anchor="e",font=("Tahoma",10,"bold")).pack(side="right",padx=8)
+            tk.Entry(r,textvariable=var,width=45,justify="right").pack(side="right")
+        def save_info():
+            for k,v in [("market_name",market.get()),("owner_name",owner.get()),("phone",phone.get()),("address",address.get())]: setting_set(k,v)
+            audit("حفظ بيانات السوق",market.get()); messagebox.showinfo("تم الحفظ","تم حفظ بيانات السوق بنجاح.")
+        def init_system():
+            init_db(); audit("تهيئة النظام","تم فحص وإنشاء جداول النظام دون حذف البيانات")
+            messagebox.showinfo("تهيئة النظام","تمت التهيئة والفحص مع الحفاظ على البيانات الحالية.")
+        tk.Button(box,text="حفظ بيانات السوق",command=save_info,bg="#172033",fg="#fff",relief="flat",padx=20,pady=9).pack(anchor="e",padx=25,pady=12)
+        tk.Button(box,text="تهيئة النظام",command=init_system,bg="#15803d",fg="#fff",relief="flat",padx=20,pady=9).pack(anchor="e",padx=25,pady=8)
+        tk.Label(box,text="مسار قاعدة البيانات:",bg="#fff",fg="#374151",font=("Tahoma",10,"bold")).pack(anchor="e",padx=25,pady=(25,4))
+        tk.Label(box,text=str(DB_PATH),bg="#fff",fg="#6b7280",font=("Tahoma",9)).pack(anchor="e",padx=25)
 
     def placeholder(self,title):
         self.title_block(title)
