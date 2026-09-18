@@ -120,8 +120,8 @@ def init_db():
     for col, typ in [("category","TEXT DEFAULT ''"),("unit","TEXT DEFAULT ''"),("min_quantity","REAL DEFAULT 0")]:
         if col not in columns:
             c.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
-    c.execute("SELECT COUNT(*) n FROM users")
-    if c.fetchone()["n"] == 0:
+    user_count = c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
+    if user_count == 0:
         c.execute("INSERT INTO users(name,role,active,created_at,password_hash,permissions) VALUES(?,?,?,?,?,?)",
                   ("admin","مدير النظام",1,now(),hash_password("1234"),json.dumps(sorted(ROLES["مدير النظام"]), ensure_ascii=False)))
     c.commit()
@@ -248,7 +248,6 @@ class App(tk.Tk):
             audit("خطأ في الشاشة",f"{key}: {e}",self.current_user)
             traceback.print_exc()
             messagebox.showerror("خطأ","حدث خطأ في الشاشة. تم تسجيله في سجل التدقيق.")
-
     def card(self,p,text,value):
         x=tk.Frame(p,bg="#fff",highlightthickness=1,highlightbackground="#e5e7eb"); x.pack(side="right",fill="both",expand=True,padx=5)
         tk.Label(x,text=text,bg="#fff",fg="#6b7280",font=("Tahoma",10)).pack(anchor="e",padx=15,pady=(13,3))
@@ -497,8 +496,7 @@ class App(tk.Tk):
         typ=tk.StringVar(value="قبض"); desc=tk.StringVar(); amount=tk.StringVar()
         tk.Label(form,text="النوع",bg="#fff").pack(side="right"); ttk.Combobox(form,textvariable=typ,values=["قبض","صرف"],state="readonly",width=10).pack(side="right",padx=6)
         tk.Label(form,text="البيان",bg="#fff").pack(side="right"); tk.Entry(form,textvariable=desc,width=28,justify="right").pack(side="right",padx=6)
-        tk.Label(form,text="المبلغ",bg="#fff").pack(side="right"); tk.Entry(form,textvariable=amount,width=14,justify="right").pack(side="right",padx=6)
-        tree=ttk.Treeview(self.content,columns=("date","kind","desc","amount","user"),show="headings")
+        tk.Label(form,text="المبلغ",bg="#fff").pack(side="right"); tk.Entry(form,textvariable=amount,width=14,justify="right").pack(side="right",padx=6)        tree=ttk.Treeview(self.content,columns=("date","kind","desc","amount","user"),show="headings")
         for c,h in [("date","التاريخ"),("kind","النوع"),("desc","البيان"),("amount","المبلغ"),("user","المستخدم")]: tree.heading(c,text=h); tree.column(c,width=170,anchor="e")
         tree.pack(fill="both",expand=True,padx=28,pady=10)
         summary=tk.StringVar()
