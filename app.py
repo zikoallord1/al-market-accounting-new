@@ -54,7 +54,7 @@ class App(tk.Tk):
         except tk.TclError: pass
         s.configure("Treeview",rowheight=32,font=("Tahoma",10))
         s.configure("Treeview.Heading",font=("Tahoma",10,"bold"))
-        self.build(); self.show("dashboard")
+        self.build(); self.show("sales")
 
     def build(self):
         h=tk.Frame(self,bg="#fff",height=72); h.pack(fill="x"); h.pack_propagate(False)
